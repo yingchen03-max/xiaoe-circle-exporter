@@ -116,6 +116,7 @@ async function runExport(message, sender) {
 
   const sourceTab = await chrome.tabs.get(sourceTabId);
   const detailUrl = normalizeDetailUrl(message.detailUrl || sourceTab.url);
+  const format = message.format === "md" ? "md" : "html";
   const jobId = crypto.randomUUID();
   const job = { jobId, sourceTabId };
   jobs.set(jobId, job);
@@ -146,7 +147,10 @@ async function runExport(message, sender) {
 
     broadcastProgress(job, {
       state: "working",
-      message: `已读取 ${countComments(result.comments)} 条评论，正在下载 ${result.resources.length} 个文件…`,
+      message:
+        format === "md"
+          ? `已读取 ${countComments(result.comments)} 条评论，正在生成 Markdown…`
+          : `已读取 ${countComments(result.comments)} 条评论，正在下载 ${result.resources.length} 个文件…`,
     });
 
     await ensureOffscreenDocument();
@@ -154,6 +158,7 @@ async function runExport(message, sender) {
       type: "XIAOE_BUILD_ARCHIVE",
       jobId,
       payload: result,
+      format,
     });
     if (!archiveResult?.ok) throw new Error(archiveResult?.error || "压缩包生成失败。");
 

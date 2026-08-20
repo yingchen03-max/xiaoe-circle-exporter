@@ -1,7 +1,6 @@
 import { strToU8, zipSync } from "fflate";
 import {
-  buildArchiveFilename,
-  buildArchiveReadme,
+  buildExportFilename,
   buildHtml,
   buildMarkdown,
   sanitizeFilename,
@@ -21,7 +20,7 @@ const MIME_EXTENSIONS = new Map([
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "XIAOE_BUILD_ARCHIVE") return undefined;
-  buildAndDownload(message.payload, message.jobId)
+  buildAndDownload(message.payload, message.jobId, message.format)
     .then((result) => sendResponse({ ok: true, ...result }))
     .catch((error) =>
       sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }),
@@ -29,7 +28,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-async function buildAndDownload(data, jobId) {
+async function buildAndDownload(data, jobId, format = "html") {
+  if (format === "md") return buildMarkdownFile(data, jobId);
+
   const entries = {};
   const localPathByUrl = new Map();
   const usedPaths = new Set();
@@ -72,19 +73,27 @@ async function buildAndDownload(data, jobId) {
     );
   }
 
-  entries["index.html"] = strToU8(buildHtml(data, localPathByUrl));
-  entries["帖子.md"] = strToU8(buildMarkdown(data, localPathByUrl));
+  entries[buildExportFilename(data, "html")] = strToU8(buildHtml(data, localPathByUrl));
   entries["post.json"] = strToU8(
     `${JSON.stringify({ ...data, resources: data.resources.map((item) => ({ ...item, localPath: localPathByUrl.get(item.url) })) }, null, 2)}\n`,
   );
-  entries["README.txt"] = strToU8(buildArchiveReadme(data, failures));
 
   sendProgress(jobId, { state: "working", message: "正在生成 ZIP 压缩包…" });
   const zipped = zipSync(entries, { level: 0 });
   const blobUrl = URL.createObjectURL(new Blob([zipped], { type: "application/zip" }));
-  const filename = buildArchiveFilename(data);
+  const filename = buildExportFilename(data, "zip");
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
   return { blobUrl, filename, resourceCount: data.resources.length };
+}
+
+async function buildMarkdownFile(data, jobId) {
+  sendProgress(jobId, { state: "working", message: "正在生成 Markdown 文档…" });
+  const localPathByUrl = new Map((data.resources || []).map((resource) => [resource.url, resource.url]));
+  const markdown = buildMarkdown(data, localPathByUrl);
+  const blobUrl = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+  const filename = buildExportFilename(data, "md");
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+  return { blobUrl, filename, resourceCount: 0 };
 }
 
 function makeResourcePath(resource, index, contentType, usedPaths) {

@@ -4,12 +4,27 @@
   var statusDot = document.getElementById("status-dot");
   var exportButton = document.getElementById("export");
   var hintElement = document.getElementById("hint");
+  var formatButtons = /* @__PURE__ */ new Map([
+    ["md", document.getElementById("format-md")],
+    ["html", document.getElementById("format-html")]
+  ]);
   var activeTab;
+  var selectedFormat = "html";
   initialize();
+  for (const [format, button] of formatButtons) {
+    button.addEventListener("click", () => {
+      selectedFormat = format;
+      for (const [key, element] of formatButtons) {
+        element.classList.toggle("format-option--active", key === format);
+        element.setAttribute("aria-pressed", String(key === format));
+      }
+    });
+  }
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type !== "XIAOE_EXPORT_PROGRESS") return;
     setStatus(message.message, message.state);
     exportButton.disabled = message.state === "working";
+    for (const button of formatButtons.values()) button.disabled = message.state === "working";
     if (message.state === "done") exportButton.textContent = "\u5DF2\u5F00\u59CB\u4E0B\u8F7D";
     if (message.state === "error") exportButton.textContent = "\u91CD\u65B0\u6253\u5305";
   });
@@ -22,7 +37,8 @@
       const response = await chrome.runtime.sendMessage({
         type: "XIAOE_EXPORT_REQUEST",
         tabId: activeTab.id,
-        detailUrl: activeTab.url
+        detailUrl: activeTab.url,
+        format: selectedFormat
       });
       if (!response?.ok) throw new Error(response?.error || "\u5BFC\u51FA\u5931\u8D25\u3002");
     } catch (error) {

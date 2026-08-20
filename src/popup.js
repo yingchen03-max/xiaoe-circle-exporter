@@ -2,14 +2,30 @@ const statusElement = document.getElementById("status");
 const statusDot = document.getElementById("status-dot");
 const exportButton = document.getElementById("export");
 const hintElement = document.getElementById("hint");
+const formatButtons = new Map([
+  ["md", document.getElementById("format-md")],
+  ["html", document.getElementById("format-html")],
+]);
 
 let activeTab;
+let selectedFormat = "html";
 initialize();
+
+for (const [format, button] of formatButtons) {
+  button.addEventListener("click", () => {
+    selectedFormat = format;
+    for (const [key, element] of formatButtons) {
+      element.classList.toggle("format-option--active", key === format);
+      element.setAttribute("aria-pressed", String(key === format));
+    }
+  });
+}
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== "XIAOE_EXPORT_PROGRESS") return;
   setStatus(message.message, message.state);
   exportButton.disabled = message.state === "working";
+  for (const button of formatButtons.values()) button.disabled = message.state === "working";
   if (message.state === "done") exportButton.textContent = "已开始下载";
   if (message.state === "error") exportButton.textContent = "重新打包";
 });
@@ -24,6 +40,7 @@ exportButton.addEventListener("click", async () => {
       type: "XIAOE_EXPORT_REQUEST",
       tabId: activeTab.id,
       detailUrl: activeTab.url,
+      format: selectedFormat,
     });
     if (!response?.ok) throw new Error(response?.error || "导出失败。");
   } catch (error) {

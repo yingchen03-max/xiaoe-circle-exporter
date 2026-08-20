@@ -51,19 +51,37 @@ var XiaoeHelperUserscript = (() => {
     }
     return lines;
   }
-  function renderMarkdownComment(comment, localPathByUrl, depth = 0) {
+  function formatReplyToMarkdown(comment, parentId) {
+    if (!comment.replyTo || !comment.replyToId || comment.replyToId === parentId) return "";
+    const missing = comment.replyMissing ? "\uFF08\u88AB\u56DE\u590D\u7684\u8BC4\u8BBA\u672A\u80FD\u83B7\u53D6\uFF09" : "";
+    return ` \u56DE\u590D **@${markdownText(comment.replyTo)}**${missing}`;
+  }
+  function renderQuestionMarkdown(question) {
+    if (!question) return [];
+    const lines = [
+      `> **${markdownText(question.asker || "\u5708\u53CB")} \u63D0\u95EE\uFF1A${markdownText(question.title)}**`,
+      ">"
+    ];
+    if (question.text) {
+      for (const line of String(question.text).split(/\r?\n/)) lines.push(line ? `> ${line}` : ">");
+    }
+    lines.push("");
+    return lines;
+  }
+  function renderMarkdownComment(comment, localPathByUrl, depth = 0, parentId = "") {
     const indent = "  ".repeat(depth);
     const role = comment.role ? ` \xB7 ${markdownText(comment.role)}` : "";
     const location2 = comment.location ? ` \xB7 ${markdownText(comment.location)}` : "";
     const time = markdownText(comment.createdAt || comment.displayTime || "\u65F6\u95F4\u672A\u77E5");
+    const replyTo = formatReplyToMarkdown(comment, parentId);
     const lines = [
-      `${indent}- **${markdownText(comment.author)}${role}** \xB7 ${time}${location2}`
+      `${indent}- **${markdownText(comment.author)}${role}**${replyTo} \xB7 ${time}${location2}`
     ];
     if (comment.text) lines.push(`${indent}  ${markdownText(comment.text).replaceAll("\n", `
 ${indent}  `)}`);
     lines.push(...renderMarkdownResources(comment.resources, localPathByUrl, `${indent}  `));
     for (const reply of comment.replies || []) {
-      lines.push(...renderMarkdownComment(reply, localPathByUrl, depth + 1));
+      lines.push(...renderMarkdownComment(reply, localPathByUrl, depth + 1, comment.id));
     }
     return lines;
   }
@@ -81,6 +99,7 @@ ${indent}  `)}`);
       "",
       "## \u6B63\u6587",
       "",
+      ...renderQuestionMarkdown(post.question),
       post.text || "\uFF08\u65E0\u6587\u5B57\u6B63\u6587\uFF09",
       "",
       "## \u9644\u4EF6",
@@ -109,12 +128,24 @@ ${indent}  `)}`);
       return path ? `<a class="media" href="${escapeHtml(path)}"><img src="${escapeHtml(path)}" alt="\u8BC4\u8BBA\u5A92\u4F53" loading="lazy"></a>` : `<p class="download-error">\u5A92\u4F53\u4E0B\u8F7D\u5931\u8D25\uFF1A${escapeHtml(url)}</p>`;
     }).join("");
   }
-  function renderHtmlComment(comment, localPathByUrl, depth = 0) {
+  function formatReplyToHtml(comment, parentId) {
+    if (!comment.replyTo || !comment.replyToId || comment.replyToId === parentId) return "";
+    const missing = comment.replyMissing ? '<span class="reply-missing">\uFF08\u88AB\u56DE\u590D\u7684\u8BC4\u8BBA\u672A\u80FD\u83B7\u53D6\uFF09</span>' : "";
+    return `<span class="reply-to">\u56DE\u590D @${escapeHtml(comment.replyTo)}</span>${missing}`;
+  }
+  function renderQuestionHtml(question) {
+    if (!question) return "";
+    const title = question.title ? `<div class="question-title">${escapeHtml(question.title)}</div>` : "";
+    const text = question.text ? `<div class="question-text">${escapeHtml(question.text).replaceAll("\n", "<br>")}</div>` : "";
+    return `<section class="question"><div class="question-meta"><strong>${escapeHtml(question.asker || "\u5708\u53CB")}</strong> \u63D0\u95EE\uFF1A</div>${title}${text}</section>`;
+  }
+  function renderHtmlComment(comment, localPathByUrl, depth = 0, parentId = "") {
     const role = comment.role ? `<span class="role">${escapeHtml(comment.role)}</span>` : "";
+    const replyTo = formatReplyToHtml(comment, parentId);
     const meta = [comment.createdAt || comment.displayTime, comment.location].filter(Boolean).join(" \xB7 ");
-    const replies = (comment.replies || []).map((reply) => renderHtmlComment(reply, localPathByUrl, depth + 1)).join("");
+    const replies = (comment.replies || []).map((reply) => renderHtmlComment(reply, localPathByUrl, depth + 1, comment.id)).join("");
     return `<article class="comment ${depth ? "comment--reply" : ""}">
-    <header><strong>${escapeHtml(comment.author)}</strong>${role}<span>${escapeHtml(meta)}</span></header>
+    <header><strong>${escapeHtml(comment.author)}</strong>${role}${replyTo}<span>${escapeHtml(meta)}</span></header>
     ${comment.text ? `<p>${escapeHtml(comment.text).replaceAll("\n", "<br>")}</p>` : ""}
     <div class="media-list">${renderHtmlMedia(comment.resources, localPathByUrl)}</div>
     ${replies ? `<div class="replies">${replies}</div>` : ""}
@@ -137,13 +168,15 @@ ${indent}  `)}`);
     *{box-sizing:border-box}body{max-width:880px;margin:0 auto;padding:32px 20px 72px}main{background:#fff;border:1px solid #e8eaf0;border-radius:18px;padding:32px;box-shadow:0 12px 40px #18213a0d}
     h1{font-size:28px;line-height:1.35;margin:0 0 12px}.meta{color:#737d91;font-size:14px;line-height:1.8}.content{margin:26px 0;white-space:pre-wrap;font-size:16px;line-height:1.9}
     h2{margin-top:34px;padding-bottom:10px;border-bottom:1px solid #eceef3;font-size:19px}a{color:#2f6ce5;text-decoration:none}ul{padding-left:20px}li{margin:8px 0}li span{margin-left:8px;color:#8991a2;font-size:12px}
-    .comment{padding:18px 0;border-bottom:1px solid #eef0f4}.comment header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.comment header span{color:#8a93a5;font-size:12px}.comment p{line-height:1.75;margin:10px 0 0}.comment--reply{margin-left:20px;padding:14px 16px;border:0;border-left:3px solid #e7ebf4;background:#f8f9fc}.role{padding:2px 7px;border-radius:999px;color:#866500!important;background:#fff0b3}
+    .comment{padding:18px 0;border-bottom:1px solid #eef0f4}.comment header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.comment header span{color:#8a93a5;font-size:12px}.comment p{line-height:1.75;margin:10px 0 0}.comment--reply{margin-left:20px;padding:14px 16px;border:0;border-left:3px solid #e7ebf4;background:#f8f9fc}.role{padding:2px 7px;border-radius:999px;color:#866500!important;background:#fff0b3}.reply-to{color:#2f6ce5!important}.reply-missing{color:#b34141!important}
+    .question{margin:26px 0;padding:16px 18px;background:#f8f9fc;border-left:3px solid #dfe4f0;border-radius:0 12px 12px 0}.question-meta{color:#737d91;font-size:14px}.question-title{font-weight:600;margin-top:8px}.question-text{white-space:pre-wrap;margin-top:8px;line-height:1.8;color:#3c4457}
     .media-list{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.media img{display:block;max-width:240px;max-height:240px;border-radius:8px;border:1px solid #e4e7ed}.download-error{color:#b34141!important}.empty{color:#8991a2}@media(max-width:600px){body{padding:0}main{border:0;border-radius:0;padding:22px}h1{font-size:23px}}
   </style>
 </head>
 <body><main>
   <h1>${escapeHtml(data.post.title)}</h1>
   <div class="meta">\u793E\u7FA4\uFF1A${escapeHtml(data.community.title)}<br>\u4F5C\u8005\uFF1A${escapeHtml(data.post.author)} \xB7 ${escapeHtml(data.post.createdAt || data.post.displayTime)}${data.post.location ? ` \xB7 ${escapeHtml(data.post.location)}` : ""}<br>\u6765\u6E90\uFF1A<a href="${escapeHtml(data.sourceUrl)}">\u6253\u5F00\u539F\u5E16</a></div>
+  ${renderQuestionHtml(data.post.question)}
   <section class="content">${escapeHtml(data.post.text || "\uFF08\u65E0\u6587\u5B57\u6B63\u6587\uFF09")}</section>
   <h2>\u9644\u4EF6</h2><ul>${attachments}</ul>
   <h2>\u8BC4\u8BBA</h2>${comments}
@@ -363,12 +396,43 @@ ${indent}  `)}`);
         location: comment.ip_place || "",
         likeCount: Number(comment.praise_cnt || comment.zan_num || 0),
         resources: [...commentResources],
-        replies
+        replies,
+        replyTo: comment.reply_nick_name || "",
+        replyToId: comment.reply_comment_id ? String(comment.reply_comment_id) : "",
+        mainCommentId: comment.main_comment_id ? String(comment.main_comment_id) : ""
       };
     }
     const comments = topLevelComments.map((comment) => normalizeComment(comment));
+    for (const comment of comments) {
+      const knownIds = /* @__PURE__ */ new Set([comment.id, ...comment.replies.map((reply) => reply.id)]);
+      for (const reply of comment.replies) {
+        if (reply.replyToId && !knownIds.has(reply.replyToId)) {
+          reply.replyMissing = true;
+        }
+      }
+    }
     const stripHtml = (html) => String(html || "").replace(/<br\s*\/?\s*>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
     const postText = feed.content?.text || feed.mix_content?.text || stripHtml(feed.org_content) || "";
+    function extractQuestion(targetFeed) {
+      const content = targetFeed.content || {};
+      const nestedContent = targetFeed.feed_info?.content || {};
+      const askerInfo = content.questioner_info || nestedContent.questioner_info || null;
+      const title = content.question_title || nestedContent.question_title || "";
+      const text = content.question_text || nestedContent.question_text || "";
+      if (!askerInfo && !text) return null;
+      return {
+        asker: askerInfo?.nick_name || "",
+        title,
+        text
+      };
+    }
+    const question = extractQuestion(feed);
+    function truncateTitle(value, maxLength = 40) {
+      const chars = Array.from(String(value || "").trim());
+      if (chars.length <= maxLength) return chars.join("");
+      return `${chars.slice(0, maxLength).join("")}\u2026`;
+    }
+    const fallbackTitle = question?.title || truncateTitle(postText.split(/\r?\n/).find(Boolean) || "") || `\u5E16\u5B50-${feed.id}`;
     const canonicalUrl = new URL(`/${communityId}/feed_detail`, currentUrl.origin);
     canonicalUrl.searchParams.set("feeds_id", feedsId);
     canonicalUrl.searchParams.set("app_id", appId);
@@ -382,8 +446,9 @@ ${indent}  `)}`);
       },
       post: {
         id: String(feed.id),
-        title: feed.title || postText.split(/\r?\n/).find(Boolean) || `\u5E16\u5B50-${feed.id}`,
+        title: feed.title || fallbackTitle,
         text: postText,
+        question,
         author: feed.nick_name || "\u533F\u540D\u7528\u6237",
         createdAt: feed.created_at || "",
         displayTime: feed.show_time || "",

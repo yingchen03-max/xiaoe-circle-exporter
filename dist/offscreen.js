@@ -712,11 +712,24 @@
     const normalized = String(value || "").normalize("NFKC").replace(ILLEGAL_FILENAME, "_").replace(/\s+/g, " ").replace(/[. ]+$/g, "").trim();
     return (normalized || fallback).slice(0, 100);
   }
-  function buildArchiveFilename(data) {
-    const sourceTime = data.post?.createdAt || data.exportedAt;
-    const timestamp = String(sourceTime || "").trim().replace(/[T\s]+/g, "-").replace(/[:.]/g, "-").replace(/[^a-z0-9_-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 19);
-    const title = sanitizeFilename(data.post?.title);
-    return `${title}-${timestamp || "\u65F6\u95F4\u672A\u77E5"}.zip`;
+  function formatExportTimestamp(value) {
+    const match = String(value || "").match(
+      /(\d{4})\D+(\d{1,2})\D+(\d{1,2})(?:\D+(\d{1,2}))?(?:\D+(\d{1,2}))?(?:\D+(\d{1,2}))?/
+    );
+    if (!match) return "";
+    const [, year, month, day, hour = "0", minute = "0", second = "0"] = match;
+    const pad = (part) => String(part).padStart(2, "0");
+    return `${year}-${pad(month)}-${pad(day)}_${pad(hour)}${pad(minute)}${pad(second)}`;
+  }
+  function buildExportFilename(data, extension = "md") {
+    const post = data.post || {};
+    const time = formatExportTimestamp(post.createdAt || post.displayTime || data.exportedAt) || "\u65F6\u95F4\u672A\u77E5";
+    const titleHead = sanitizeFilename(
+      Array.from(String(post.title || "").trim()).slice(0, 5).join(""),
+      "\u5E16\u5B50"
+    );
+    const author = sanitizeFilename(post.author, "\u533F\u540D\u7528\u6237");
+    return `${time}_${titleHead}_${author}.${extension}`;
   }
   function escapeHtml(value) {
     return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -740,19 +753,37 @@
     }
     return lines;
   }
-  function renderMarkdownComment(comment, localPathByUrl, depth = 0) {
+  function formatReplyToMarkdown(comment, parentId) {
+    if (!comment.replyTo || !comment.replyToId || comment.replyToId === parentId) return "";
+    const missing = comment.replyMissing ? "\uFF08\u88AB\u56DE\u590D\u7684\u8BC4\u8BBA\u672A\u80FD\u83B7\u53D6\uFF09" : "";
+    return ` \u56DE\u590D **@${markdownText(comment.replyTo)}**${missing}`;
+  }
+  function renderQuestionMarkdown(question) {
+    if (!question) return [];
+    const lines = [
+      `> **${markdownText(question.asker || "\u5708\u53CB")} \u63D0\u95EE\uFF1A${markdownText(question.title)}**`,
+      ">"
+    ];
+    if (question.text) {
+      for (const line of String(question.text).split(/\r?\n/)) lines.push(line ? `> ${line}` : ">");
+    }
+    lines.push("");
+    return lines;
+  }
+  function renderMarkdownComment(comment, localPathByUrl, depth = 0, parentId = "") {
     const indent = "  ".repeat(depth);
     const role = comment.role ? ` \xB7 ${markdownText(comment.role)}` : "";
     const location = comment.location ? ` \xB7 ${markdownText(comment.location)}` : "";
     const time = markdownText(comment.createdAt || comment.displayTime || "\u65F6\u95F4\u672A\u77E5");
+    const replyTo = formatReplyToMarkdown(comment, parentId);
     const lines = [
-      `${indent}- **${markdownText(comment.author)}${role}** \xB7 ${time}${location}`
+      `${indent}- **${markdownText(comment.author)}${role}**${replyTo} \xB7 ${time}${location}`
     ];
     if (comment.text) lines.push(`${indent}  ${markdownText(comment.text).replaceAll("\n", `
 ${indent}  `)}`);
     lines.push(...renderMarkdownResources(comment.resources, localPathByUrl, `${indent}  `));
     for (const reply of comment.replies || []) {
-      lines.push(...renderMarkdownComment(reply, localPathByUrl, depth + 1));
+      lines.push(...renderMarkdownComment(reply, localPathByUrl, depth + 1, comment.id));
     }
     return lines;
   }
@@ -770,6 +801,7 @@ ${indent}  `)}`);
       "",
       "## \u6B63\u6587",
       "",
+      ...renderQuestionMarkdown(post.question),
       post.text || "\uFF08\u65E0\u6587\u5B57\u6B63\u6587\uFF09",
       "",
       "## \u9644\u4EF6",
@@ -798,12 +830,24 @@ ${indent}  `)}`);
       return path ? `<a class="media" href="${escapeHtml(path)}"><img src="${escapeHtml(path)}" alt="\u8BC4\u8BBA\u5A92\u4F53" loading="lazy"></a>` : `<p class="download-error">\u5A92\u4F53\u4E0B\u8F7D\u5931\u8D25\uFF1A${escapeHtml(url)}</p>`;
     }).join("");
   }
-  function renderHtmlComment(comment, localPathByUrl, depth = 0) {
+  function formatReplyToHtml(comment, parentId) {
+    if (!comment.replyTo || !comment.replyToId || comment.replyToId === parentId) return "";
+    const missing = comment.replyMissing ? '<span class="reply-missing">\uFF08\u88AB\u56DE\u590D\u7684\u8BC4\u8BBA\u672A\u80FD\u83B7\u53D6\uFF09</span>' : "";
+    return `<span class="reply-to">\u56DE\u590D @${escapeHtml(comment.replyTo)}</span>${missing}`;
+  }
+  function renderQuestionHtml(question) {
+    if (!question) return "";
+    const title = question.title ? `<div class="question-title">${escapeHtml(question.title)}</div>` : "";
+    const text = question.text ? `<div class="question-text">${escapeHtml(question.text).replaceAll("\n", "<br>")}</div>` : "";
+    return `<section class="question"><div class="question-meta"><strong>${escapeHtml(question.asker || "\u5708\u53CB")}</strong> \u63D0\u95EE\uFF1A</div>${title}${text}</section>`;
+  }
+  function renderHtmlComment(comment, localPathByUrl, depth = 0, parentId = "") {
     const role = comment.role ? `<span class="role">${escapeHtml(comment.role)}</span>` : "";
+    const replyTo = formatReplyToHtml(comment, parentId);
     const meta = [comment.createdAt || comment.displayTime, comment.location].filter(Boolean).join(" \xB7 ");
-    const replies = (comment.replies || []).map((reply) => renderHtmlComment(reply, localPathByUrl, depth + 1)).join("");
+    const replies = (comment.replies || []).map((reply) => renderHtmlComment(reply, localPathByUrl, depth + 1, comment.id)).join("");
     return `<article class="comment ${depth ? "comment--reply" : ""}">
-    <header><strong>${escapeHtml(comment.author)}</strong>${role}<span>${escapeHtml(meta)}</span></header>
+    <header><strong>${escapeHtml(comment.author)}</strong>${role}${replyTo}<span>${escapeHtml(meta)}</span></header>
     ${comment.text ? `<p>${escapeHtml(comment.text).replaceAll("\n", "<br>")}</p>` : ""}
     <div class="media-list">${renderHtmlMedia(comment.resources, localPathByUrl)}</div>
     ${replies ? `<div class="replies">${replies}</div>` : ""}
@@ -826,39 +870,19 @@ ${indent}  `)}`);
     *{box-sizing:border-box}body{max-width:880px;margin:0 auto;padding:32px 20px 72px}main{background:#fff;border:1px solid #e8eaf0;border-radius:18px;padding:32px;box-shadow:0 12px 40px #18213a0d}
     h1{font-size:28px;line-height:1.35;margin:0 0 12px}.meta{color:#737d91;font-size:14px;line-height:1.8}.content{margin:26px 0;white-space:pre-wrap;font-size:16px;line-height:1.9}
     h2{margin-top:34px;padding-bottom:10px;border-bottom:1px solid #eceef3;font-size:19px}a{color:#2f6ce5;text-decoration:none}ul{padding-left:20px}li{margin:8px 0}li span{margin-left:8px;color:#8991a2;font-size:12px}
-    .comment{padding:18px 0;border-bottom:1px solid #eef0f4}.comment header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.comment header span{color:#8a93a5;font-size:12px}.comment p{line-height:1.75;margin:10px 0 0}.comment--reply{margin-left:20px;padding:14px 16px;border:0;border-left:3px solid #e7ebf4;background:#f8f9fc}.role{padding:2px 7px;border-radius:999px;color:#866500!important;background:#fff0b3}
+    .comment{padding:18px 0;border-bottom:1px solid #eef0f4}.comment header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.comment header span{color:#8a93a5;font-size:12px}.comment p{line-height:1.75;margin:10px 0 0}.comment--reply{margin-left:20px;padding:14px 16px;border:0;border-left:3px solid #e7ebf4;background:#f8f9fc}.role{padding:2px 7px;border-radius:999px;color:#866500!important;background:#fff0b3}.reply-to{color:#2f6ce5!important}.reply-missing{color:#b34141!important}
+    .question{margin:26px 0;padding:16px 18px;background:#f8f9fc;border-left:3px solid #dfe4f0;border-radius:0 12px 12px 0}.question-meta{color:#737d91;font-size:14px}.question-title{font-weight:600;margin-top:8px}.question-text{white-space:pre-wrap;margin-top:8px;line-height:1.8;color:#3c4457}
     .media-list{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.media img{display:block;max-width:240px;max-height:240px;border-radius:8px;border:1px solid #e4e7ed}.download-error{color:#b34141!important}.empty{color:#8991a2}@media(max-width:600px){body{padding:0}main{border:0;border-radius:0;padding:22px}h1{font-size:23px}}
   </style>
 </head>
 <body><main>
   <h1>${escapeHtml(data.post.title)}</h1>
   <div class="meta">\u793E\u7FA4\uFF1A${escapeHtml(data.community.title)}<br>\u4F5C\u8005\uFF1A${escapeHtml(data.post.author)} \xB7 ${escapeHtml(data.post.createdAt || data.post.displayTime)}${data.post.location ? ` \xB7 ${escapeHtml(data.post.location)}` : ""}<br>\u6765\u6E90\uFF1A<a href="${escapeHtml(data.sourceUrl)}">\u6253\u5F00\u539F\u5E16</a></div>
+  ${renderQuestionHtml(data.post.question)}
   <section class="content">${escapeHtml(data.post.text || "\uFF08\u65E0\u6587\u5B57\u6B63\u6587\uFF09")}</section>
   <h2>\u9644\u4EF6</h2><ul>${attachments}</ul>
   <h2>\u8BC4\u8BBA</h2>${comments}
 </main></body></html>`;
-  }
-  function buildArchiveReadme(data, failedDownloads = []) {
-    const lines = [
-      "\u9E45\u5708\u5B50\u5E16\u5B50\u5BFC\u51FA\u5305",
-      "================",
-      "",
-      `\u5E16\u5B50\uFF1A${data.post.title}`,
-      `\u6765\u6E90\uFF1A${data.sourceUrl}`,
-      `\u5BFC\u51FA\uFF1A${data.exportedAt}`,
-      "",
-      "\u6587\u4EF6\u8BF4\u660E\uFF1A",
-      "- index.html\uFF1A\u53EF\u76F4\u63A5\u7528\u6D4F\u89C8\u5668\u6253\u5F00\u7684\u9605\u8BFB\u7248",
-      "- \u5E16\u5B50.md\uFF1AMarkdown \u7248\u6B63\u6587\u4E0E\u8BC4\u8BBA",
-      "- post.json\uFF1A\u7ED3\u6784\u5316\u6570\u636E\uFF08\u4E0D\u542B\u9690\u85CF\u7684\u7CBE\u786E IP \u548C\u5185\u90E8\u7528\u6237\u6807\u8BC6\uFF09",
-      "- files/\uFF1A\u5E16\u5B50\u9644\u4EF6",
-      "- media/\uFF1A\u5E16\u5B50\u53CA\u8BC4\u8BBA\u4E2D\u7684\u56FE\u7247\u3001\u97F3\u9891\u6216\u89C6\u9891"
-    ];
-    if (failedDownloads.length) {
-      lines.push("", "\u4E0B\u8F7D\u5931\u8D25\uFF1A", ...failedDownloads.map((item) => `- ${item.url}\uFF1A${item.error}`));
-    }
-    return `${lines.join("\n")}
-`;
   }
 
   // src/offscreen.js
@@ -875,12 +899,13 @@ ${indent}  `)}`);
   ]);
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "XIAOE_BUILD_ARCHIVE") return void 0;
-    buildAndDownload(message.payload, message.jobId).then((result) => sendResponse({ ok: true, ...result })).catch(
+    buildAndDownload(message.payload, message.jobId, message.format).then((result) => sendResponse({ ok: true, ...result })).catch(
       (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
     );
     return true;
   });
-  async function buildAndDownload(data, jobId) {
+  async function buildAndDownload(data, jobId, format = "html") {
+    if (format === "md") return buildMarkdownFile(data, jobId);
     const entries = {};
     const localPathByUrl = /* @__PURE__ */ new Map();
     const usedPaths = /* @__PURE__ */ new Set();
@@ -918,19 +943,26 @@ ${indent}  `)}`);
         `\u6709 ${failures.length} \u4E2A\u6587\u4EF6\u4E0B\u8F7D\u5931\u8D25\uFF0C\u5DF2\u505C\u6B62\u5BFC\u51FA\u4EE5\u907F\u514D\u751F\u6210\u4E0D\u5B8C\u6574\u538B\u7F29\u5305\uFF1A${firstFailure.error}`
       );
     }
-    entries["index.html"] = strToU8(buildHtml(data, localPathByUrl));
-    entries["\u5E16\u5B50.md"] = strToU8(buildMarkdown(data, localPathByUrl));
+    entries[buildExportFilename(data, "html")] = strToU8(buildHtml(data, localPathByUrl));
     entries["post.json"] = strToU8(
       `${JSON.stringify({ ...data, resources: data.resources.map((item) => ({ ...item, localPath: localPathByUrl.get(item.url) })) }, null, 2)}
 `
     );
-    entries["README.txt"] = strToU8(buildArchiveReadme(data, failures));
     sendProgress(jobId, { state: "working", message: "\u6B63\u5728\u751F\u6210 ZIP \u538B\u7F29\u5305\u2026" });
     const zipped = zipSync(entries, { level: 0 });
     const blobUrl = URL.createObjectURL(new Blob([zipped], { type: "application/zip" }));
-    const filename = buildArchiveFilename(data);
+    const filename = buildExportFilename(data, "zip");
     setTimeout(() => URL.revokeObjectURL(blobUrl), 6e4);
     return { blobUrl, filename, resourceCount: data.resources.length };
+  }
+  async function buildMarkdownFile(data, jobId) {
+    sendProgress(jobId, { state: "working", message: "\u6B63\u5728\u751F\u6210 Markdown \u6587\u6863\u2026" });
+    const localPathByUrl = new Map((data.resources || []).map((resource) => [resource.url, resource.url]));
+    const markdown = buildMarkdown(data, localPathByUrl);
+    const blobUrl = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+    const filename = buildExportFilename(data, "md");
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 6e4);
+    return { blobUrl, filename, resourceCount: 0 };
   }
   function makeResourcePath(resource, index, contentType, usedPaths) {
     let name = resource.name;

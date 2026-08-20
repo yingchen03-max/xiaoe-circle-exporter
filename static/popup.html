@@ -21,6 +21,17 @@
         <p id="status">正在识别当前页面…</p>
       </section>
 
+      <section class="format-group" aria-label="导出格式">
+        <button id="format-md" class="format-option" type="button" aria-pressed="false">
+          <span class="format-option__name">Markdown（.md）</span>
+          <span class="format-option__desc">仅正文与评论，单文件直接保存</span>
+        </button>
+        <button id="format-html" class="format-option format-option--active" type="button" aria-pressed="true">
+          <span class="format-option__name">HTML 离线包（.zip）</span>
+          <span class="format-option__desc">含附件、图片、音频和视频</span>
+        </button>
+      </section>
+
       <button id="export" type="button" disabled>打包当前帖子</button>
       <p id="hint" class="hint"></p>
 

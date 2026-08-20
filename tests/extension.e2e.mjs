@@ -139,7 +139,11 @@ try {
   assert.ok(cardBox.x + cardBox.width - (buttonBox.x + buttonBox.width) <= 20, "导出按钮应靠右");
   assert.equal(rectanglesOverlap(buttonBox, detailBox), false, "导出按钮不得遮挡查看详情");
   await exportButton.click();
+  const menu = page.locator("#xiaoe-circle-export-format-menu");
+  await menu.waitFor({ state: "visible" });
   const toast = page.locator("#xiaoe-circle-export-toast");
+
+  await menu.locator(".xiaoe-circle-export-format-option[data-format='html']").click();
   await toast.waitFor({ state: "visible" });
   await page.waitForFunction(() => {
     const state = document.getElementById("xiaoe-circle-export-toast")?.dataset.state;
@@ -149,15 +153,32 @@ try {
   const toastText = await toast.textContent();
   assert.equal(toastState, "done", toastText || "导出未完成");
 
-  const zipPath = await waitForZip(downloadsDirectory);
+  const zipPath = await waitForFile(downloadsDirectory, ".zip");
+  assert.match(toastText, /2026-08-12_100000_插件端到端_测试作者\.zip/);
   const archive = unzipSync(new Uint8Array(await readFile(zipPath)));
-  assert.ok(archive["index.html"]);
-  assert.ok(archive["帖子.md"]);
+  const htmlEntry = "2026-08-12_100000_插件端到端_测试作者.html";
+  assert.ok(archive[htmlEntry]);
   assert.ok(archive["post.json"]);
   assert.ok(archive["files/报告.pdf"]);
   assert.ok(archive["media/comments/101/评论图片.png"]);
-  assert.match(strFromU8(archive["帖子.md"]), /这是完整评论/);
-  console.log(`E2E export verified: ${path.basename(zipPath)}`);
+  assert.ok(!archive["index.html"]);
+  assert.ok(!archive["帖子.md"]);
+  assert.match(strFromU8(archive[htmlEntry]), /这是完整评论/);
+  console.log(`E2E html export verified: ${path.basename(zipPath)}`);
+
+  await exportButton.click();
+  await menu.waitFor({ state: "visible" });
+  await menu.locator(".xiaoe-circle-export-format-option[data-format='md']").click();
+  await page.waitForFunction(() => {
+    const element = document.getElementById("xiaoe-circle-export-toast");
+    return (
+      element?.dataset.state === "done" &&
+      element.textContent?.includes("2026-08-12_100000_插件端到端_测试作者.md")
+    );
+  }, null, { timeout: 30_000 });
+  const mdPath = await waitForFile(downloadsDirectory, ".md");
+  assert.match(await readFile(mdPath, "utf8"), /这是完整评论/);
+  console.log(`E2E markdown export verified: ${path.basename(mdPath)}`);
 } finally {
   await context.close();
   await rm(profileDirectory, { recursive: true, force: true });
@@ -172,15 +193,15 @@ async function json(route, data) {
   });
 }
 
-async function waitForZip(directory) {
+async function waitForFile(directory, extension) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const names = await readdir(directory);
-    const completeZip = names.find((name) => name.endsWith(".zip"));
-    if (completeZip) return path.join(directory, completeZip);
+    const match = names.find((name) => name.endsWith(extension));
+    if (match) return path.join(directory, match);
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error("Timed out waiting for ZIP download");
+  throw new Error(`Timed out waiting for ${extension} download`);
 }
 
 function rectanglesOverlap(first, second) {

@@ -24,6 +24,28 @@ export function buildArchiveFilename(data) {
   return `${title}-${timestamp || "时间未知"}.zip`;
 }
 
+function formatExportTimestamp(value) {
+  const match = String(value || "").match(
+    /(\d{4})\D+(\d{1,2})\D+(\d{1,2})(?:\D+(\d{1,2}))?(?:\D+(\d{1,2}))?(?:\D+(\d{1,2}))?/,
+  );
+  if (!match) return "";
+  const [, year, month, day, hour = "0", minute = "0", second = "0"] = match;
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)}_${pad(hour)}${pad(minute)}${pad(second)}`;
+}
+
+export function buildExportFilename(data, extension = "md") {
+  const post = data.post || {};
+  const time =
+    formatExportTimestamp(post.createdAt || post.displayTime || data.exportedAt) || "时间未知";
+  const titleHead = sanitizeFilename(
+    Array.from(String(post.title || "").trim()).slice(0, 5).join(""),
+    "帖子",
+  );
+  const author = sanitizeFilename(post.author, "匿名用户");
+  return `${time}_${titleHead}_${author}.${extension}`;
+}
+
 export function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -55,18 +77,39 @@ function renderMarkdownResources(urls, localPathByUrl, indent = "") {
   return lines;
 }
 
-function renderMarkdownComment(comment, localPathByUrl, depth = 0) {
+function formatReplyToMarkdown(comment, parentId) {
+  if (!comment.replyTo || !comment.replyToId || comment.replyToId === parentId) return "";
+  const missing = comment.replyMissing ? "（被回复的评论未能获取）" : "";
+  return ` 回复 **@${markdownText(comment.replyTo)}**${missing}`;
+}
+
+// 问答帖中被回复的问题：以引用块形式渲染在正文（作者回答）之前
+function renderQuestionMarkdown(question) {
+  if (!question) return [];
+  const lines = [
+    `> **${markdownText(question.asker || "圈友")} 提问：${markdownText(question.title)}**`,
+    ">",
+  ];
+  if (question.text) {
+    for (const line of String(question.text).split(/\r?\n/)) lines.push(line ? `> ${line}` : ">");
+  }
+  lines.push("");
+  return lines;
+}
+
+function renderMarkdownComment(comment, localPathByUrl, depth = 0, parentId = "") {
   const indent = "  ".repeat(depth);
   const role = comment.role ? ` · ${markdownText(comment.role)}` : "";
   const location = comment.location ? ` · ${markdownText(comment.location)}` : "";
   const time = markdownText(comment.createdAt || comment.displayTime || "时间未知");
+  const replyTo = formatReplyToMarkdown(comment, parentId);
   const lines = [
-    `${indent}- **${markdownText(comment.author)}${role}** · ${time}${location}`,
+    `${indent}- **${markdownText(comment.author)}${role}**${replyTo} · ${time}${location}`,
   ];
   if (comment.text) lines.push(`${indent}  ${markdownText(comment.text).replaceAll("\n", `\n${indent}  `)}`);
   lines.push(...renderMarkdownResources(comment.resources, localPathByUrl, `${indent}  `));
   for (const reply of comment.replies || []) {
-    lines.push(...renderMarkdownComment(reply, localPathByUrl, depth + 1));
+    lines.push(...renderMarkdownComment(reply, localPathByUrl, depth + 1, comment.id));
   }
   return lines;
 }
@@ -85,6 +128,7 @@ export function buildMarkdown(data, localPathByUrl = new Map()) {
     "",
     "## 正文",
     "",
+    ...renderQuestionMarkdown(post.question),
     post.text || "（无文字正文）",
     "",
     "## 附件",
@@ -122,14 +166,35 @@ function renderHtmlMedia(urls, localPathByUrl) {
     .join("");
 }
 
-function renderHtmlComment(comment, localPathByUrl, depth = 0) {
+function formatReplyToHtml(comment, parentId) {
+  if (!comment.replyTo || !comment.replyToId || comment.replyToId === parentId) return "";
+  const missing = comment.replyMissing
+    ? '<span class="reply-missing">（被回复的评论未能获取）</span>'
+    : "";
+  return `<span class="reply-to">回复 @${escapeHtml(comment.replyTo)}</span>${missing}`;
+}
+
+// 问答帖中被回复的问题：以引用块形式渲染在正文（作者回答）之前
+function renderQuestionHtml(question) {
+  if (!question) return "";
+  const title = question.title
+    ? `<div class="question-title">${escapeHtml(question.title)}</div>`
+    : "";
+  const text = question.text
+    ? `<div class="question-text">${escapeHtml(question.text).replaceAll("\n", "<br>")}</div>`
+    : "";
+  return `<section class="question"><div class="question-meta"><strong>${escapeHtml(question.asker || "圈友")}</strong> 提问：</div>${title}${text}</section>`;
+}
+
+function renderHtmlComment(comment, localPathByUrl, depth = 0, parentId = "") {
   const role = comment.role ? `<span class="role">${escapeHtml(comment.role)}</span>` : "";
+  const replyTo = formatReplyToHtml(comment, parentId);
   const meta = [comment.createdAt || comment.displayTime, comment.location].filter(Boolean).join(" · ");
   const replies = (comment.replies || [])
-    .map((reply) => renderHtmlComment(reply, localPathByUrl, depth + 1))
+    .map((reply) => renderHtmlComment(reply, localPathByUrl, depth + 1, comment.id))
     .join("");
   return `<article class="comment ${depth ? "comment--reply" : ""}">
-    <header><strong>${escapeHtml(comment.author)}</strong>${role}<span>${escapeHtml(meta)}</span></header>
+    <header><strong>${escapeHtml(comment.author)}</strong>${role}${replyTo}<span>${escapeHtml(meta)}</span></header>
     ${comment.text ? `<p>${escapeHtml(comment.text).replaceAll("\n", "<br>")}</p>` : ""}
     <div class="media-list">${renderHtmlMedia(comment.resources, localPathByUrl)}</div>
     ${replies ? `<div class="replies">${replies}</div>` : ""}
@@ -162,13 +227,15 @@ export function buildHtml(data, localPathByUrl = new Map()) {
     *{box-sizing:border-box}body{max-width:880px;margin:0 auto;padding:32px 20px 72px}main{background:#fff;border:1px solid #e8eaf0;border-radius:18px;padding:32px;box-shadow:0 12px 40px #18213a0d}
     h1{font-size:28px;line-height:1.35;margin:0 0 12px}.meta{color:#737d91;font-size:14px;line-height:1.8}.content{margin:26px 0;white-space:pre-wrap;font-size:16px;line-height:1.9}
     h2{margin-top:34px;padding-bottom:10px;border-bottom:1px solid #eceef3;font-size:19px}a{color:#2f6ce5;text-decoration:none}ul{padding-left:20px}li{margin:8px 0}li span{margin-left:8px;color:#8991a2;font-size:12px}
-    .comment{padding:18px 0;border-bottom:1px solid #eef0f4}.comment header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.comment header span{color:#8a93a5;font-size:12px}.comment p{line-height:1.75;margin:10px 0 0}.comment--reply{margin-left:20px;padding:14px 16px;border:0;border-left:3px solid #e7ebf4;background:#f8f9fc}.role{padding:2px 7px;border-radius:999px;color:#866500!important;background:#fff0b3}
+    .comment{padding:18px 0;border-bottom:1px solid #eef0f4}.comment header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.comment header span{color:#8a93a5;font-size:12px}.comment p{line-height:1.75;margin:10px 0 0}.comment--reply{margin-left:20px;padding:14px 16px;border:0;border-left:3px solid #e7ebf4;background:#f8f9fc}.role{padding:2px 7px;border-radius:999px;color:#866500!important;background:#fff0b3}.reply-to{color:#2f6ce5!important}.reply-missing{color:#b34141!important}
+    .question{margin:26px 0;padding:16px 18px;background:#f8f9fc;border-left:3px solid #dfe4f0;border-radius:0 12px 12px 0}.question-meta{color:#737d91;font-size:14px}.question-title{font-weight:600;margin-top:8px}.question-text{white-space:pre-wrap;margin-top:8px;line-height:1.8;color:#3c4457}
     .media-list{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.media img{display:block;max-width:240px;max-height:240px;border-radius:8px;border:1px solid #e4e7ed}.download-error{color:#b34141!important}.empty{color:#8991a2}@media(max-width:600px){body{padding:0}main{border:0;border-radius:0;padding:22px}h1{font-size:23px}}
   </style>
 </head>
 <body><main>
   <h1>${escapeHtml(data.post.title)}</h1>
   <div class="meta">社群：${escapeHtml(data.community.title)}<br>作者：${escapeHtml(data.post.author)} · ${escapeHtml(data.post.createdAt || data.post.displayTime)}${data.post.location ? ` · ${escapeHtml(data.post.location)}` : ""}<br>来源：<a href="${escapeHtml(data.sourceUrl)}">打开原帖</a></div>
+  ${renderQuestionHtml(data.post.question)}
   <section class="content">${escapeHtml(data.post.text || "（无文字正文）")}</section>
   <h2>附件</h2><ul>${attachments}</ul>
   <h2>评论</h2>${comments}

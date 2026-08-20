@@ -190,12 +190,43 @@
         location: comment.ip_place || "",
         likeCount: Number(comment.praise_cnt || comment.zan_num || 0),
         resources: [...commentResources],
-        replies
+        replies,
+        replyTo: comment.reply_nick_name || "",
+        replyToId: comment.reply_comment_id ? String(comment.reply_comment_id) : "",
+        mainCommentId: comment.main_comment_id ? String(comment.main_comment_id) : ""
       };
     }
     const comments = topLevelComments.map((comment) => normalizeComment(comment));
+    for (const comment of comments) {
+      const knownIds = /* @__PURE__ */ new Set([comment.id, ...comment.replies.map((reply) => reply.id)]);
+      for (const reply of comment.replies) {
+        if (reply.replyToId && !knownIds.has(reply.replyToId)) {
+          reply.replyMissing = true;
+        }
+      }
+    }
     const stripHtml = (html) => String(html || "").replace(/<br\s*\/?\s*>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
     const postText = feed.content?.text || feed.mix_content?.text || stripHtml(feed.org_content) || "";
+    function extractQuestion(targetFeed) {
+      const content = targetFeed.content || {};
+      const nestedContent = targetFeed.feed_info?.content || {};
+      const askerInfo = content.questioner_info || nestedContent.questioner_info || null;
+      const title = content.question_title || nestedContent.question_title || "";
+      const text = content.question_text || nestedContent.question_text || "";
+      if (!askerInfo && !text) return null;
+      return {
+        asker: askerInfo?.nick_name || "",
+        title,
+        text
+      };
+    }
+    const question = extractQuestion(feed);
+    function truncateTitle(value, maxLength = 40) {
+      const chars = Array.from(String(value || "").trim());
+      if (chars.length <= maxLength) return chars.join("");
+      return `${chars.slice(0, maxLength).join("")}\u2026`;
+    }
+    const fallbackTitle = question?.title || truncateTitle(postText.split(/\r?\n/).find(Boolean) || "") || `\u5E16\u5B50-${feed.id}`;
     const canonicalUrl = new URL(`/${communityId}/feed_detail`, currentUrl.origin);
     canonicalUrl.searchParams.set("feeds_id", feedsId);
     canonicalUrl.searchParams.set("app_id", appId);
@@ -209,8 +240,9 @@
       },
       post: {
         id: String(feed.id),
-        title: feed.title || postText.split(/\r?\n/).find(Boolean) || `\u5E16\u5B50-${feed.id}`,
+        title: feed.title || fallbackTitle,
         text: postText,
+        question,
         author: feed.nick_name || "\u533F\u540D\u7528\u6237",
         createdAt: feed.created_at || "",
         displayTime: feed.show_time || "",
@@ -327,6 +359,7 @@
     if (!Number.isInteger(sourceTabId)) throw new Error("\u65E0\u6CD5\u8BC6\u522B\u5F53\u524D\u6807\u7B7E\u9875\u3002");
     const sourceTab = await chrome.tabs.get(sourceTabId);
     const detailUrl = normalizeDetailUrl(message.detailUrl || sourceTab.url);
+    const format = message.format === "md" ? "md" : "html";
     const jobId = crypto.randomUUID();
     const job = { jobId, sourceTabId };
     jobs.set(jobId, job);
@@ -352,13 +385,14 @@
       if (!result) throw new Error("\u9875\u9762\u6CA1\u6709\u8FD4\u56DE\u5E16\u5B50\u6570\u636E\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\u3002");
       broadcastProgress(job, {
         state: "working",
-        message: `\u5DF2\u8BFB\u53D6 ${countComments(result.comments)} \u6761\u8BC4\u8BBA\uFF0C\u6B63\u5728\u4E0B\u8F7D ${result.resources.length} \u4E2A\u6587\u4EF6\u2026`
+        message: format === "md" ? `\u5DF2\u8BFB\u53D6 ${countComments(result.comments)} \u6761\u8BC4\u8BBA\uFF0C\u6B63\u5728\u751F\u6210 Markdown\u2026` : `\u5DF2\u8BFB\u53D6 ${countComments(result.comments)} \u6761\u8BC4\u8BBA\uFF0C\u6B63\u5728\u4E0B\u8F7D ${result.resources.length} \u4E2A\u6587\u4EF6\u2026`
       });
       await ensureOffscreenDocument();
       const archiveResult = await chrome.runtime.sendMessage({
         type: "XIAOE_BUILD_ARCHIVE",
         jobId,
-        payload: result
+        payload: result,
+        format
       });
       if (!archiveResult?.ok) throw new Error(archiveResult?.error || "\u538B\u7F29\u5305\u751F\u6210\u5931\u8D25\u3002");
       const downloadId = await chrome.downloads.download({

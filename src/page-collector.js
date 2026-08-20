@@ -231,10 +231,24 @@ export async function collectPostFromPage(options = {}) {
       likeCount: Number(comment.praise_cnt || comment.zan_num || 0),
       resources: [...commentResources],
       replies,
+      replyTo: comment.reply_nick_name || "",
+      replyToId: comment.reply_comment_id ? String(comment.reply_comment_id) : "",
+      mainCommentId: comment.main_comment_id ? String(comment.main_comment_id) : "",
     };
   }
 
   const comments = topLevelComments.map((comment) => normalizeComment(comment));
+
+  // 标记“回复的回复”中被回复评论缺失的情况（已被删除或接口未返回），
+  // 便于导出时提示读者：该回复针对的问题原文未能获取。
+  for (const comment of comments) {
+    const knownIds = new Set([comment.id, ...comment.replies.map((reply) => reply.id)]);
+    for (const reply of comment.replies) {
+      if (reply.replyToId && !knownIds.has(reply.replyToId)) {
+        reply.replyMissing = true;
+      }
+    }
+  }
   const stripHtml = (html) =>
     String(html || "")
       .replace(/<br\s*\/?\s*>/gi, "\n")
@@ -247,6 +261,43 @@ export async function collectPostFromPage(options = {}) {
       .trim();
   const postText =
     feed.content?.text || feed.mix_content?.text || stripHtml(feed.org_content) || "";
+
+  // 问答帖（feeds_type=10）：作者以回答形式发布的帖子会在 content 内联被回复的问题
+  // （questioner_info/question_title/question_text），或通过 feed_info 嵌套原始问题帖。
+  // 需要把问题一并导出，否则读者看不到回答所针对的内容。
+  // 问题帖本身（提问者即帖子作者，content 无 questioner_info/question_text）不受影响。
+  // 注意：本函数通过 chrome.scripting.executeScript 注入页面执行，所有辅助函数
+  // 必须定义在 collectPostFromPage 函数体内部，不能放在模块顶层。
+  function extractQuestion(targetFeed) {
+    const content = targetFeed.content || {};
+    const nestedContent = targetFeed.feed_info?.content || {};
+    const askerInfo = content.questioner_info || nestedContent.questioner_info || null;
+    const title = content.question_title || nestedContent.question_title || "";
+    const text = content.question_text || nestedContent.question_text || "";
+    if (!askerInfo && !text) return null;
+    return {
+      asker: askerInfo?.nick_name || "",
+      title,
+      text,
+    };
+  }
+
+  const question = extractQuestion(feed);
+
+  // 标题 fallback 链：API 标题 → 问答帖的问题标题 → 正文第一行（截断 40 字）→ 帖子-ID。
+  // 问答帖（回答帖）的 feed.title 常为空，若直接落到正文第一行会取到作者回答的
+  // 整段长句，不适合做标题；问题标题才是帖子主题。
+  function truncateTitle(value, maxLength = 40) {
+    const chars = Array.from(String(value || "").trim());
+    if (chars.length <= maxLength) return chars.join("");
+    return `${chars.slice(0, maxLength).join("")}…`;
+  }
+
+  const fallbackTitle =
+    question?.title ||
+    truncateTitle(postText.split(/\r?\n/).find(Boolean) || "") ||
+    `帖子-${feed.id}`;
+
   const canonicalUrl = new URL(`/${communityId}/feed_detail`, currentUrl.origin);
   canonicalUrl.searchParams.set("feeds_id", feedsId);
   canonicalUrl.searchParams.set("app_id", appId);
@@ -261,8 +312,9 @@ export async function collectPostFromPage(options = {}) {
     },
     post: {
       id: String(feed.id),
-      title: feed.title || postText.split(/\r?\n/).find(Boolean) || `帖子-${feed.id}`,
+      title: feed.title || fallbackTitle,
       text: postText,
+      question,
       author: feed.nick_name || "匿名用户",
       createdAt: feed.created_at || "",
       displayTime: feed.show_time || "",
