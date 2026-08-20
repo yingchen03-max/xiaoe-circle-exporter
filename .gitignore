@@ -2,3 +2,11 @@ node_modules/
 .DS_Store
 *.log
 coverage/
+
+# 本地逆向分析脚本与下载的前端 chunk（仅开发调试用）
+analyze_js*.py
+quanzi_*.js
+
+# 工具目录
+.codebuddy/
+.playwright-cli/
